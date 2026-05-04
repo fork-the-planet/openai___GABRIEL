@@ -448,7 +448,7 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
         "batch": 0.5,
     },
     "gpt-5.2": {"input": 1.75, "cached_input": 0.175, "output": 14.00, "batch": 0.5},
-    "gpt-5.4": {"input": 2.50, "cached_input": 0.25, "output": 15.00, "batch": 0.5},
+    "gpt-5.5": {"input": 5.00, "cached_input": 0.50, "output": 30.00, "batch": 0.5},
     "gpt-5.1": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
     "gpt-5": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
     "gpt-5-mini": {"input": 0.25, "cached_input": 0.025, "output": 2.00, "batch": 0.5},
