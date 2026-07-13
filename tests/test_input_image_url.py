@@ -26,7 +26,7 @@ def test_get_response_encodes_image(monkeypatch):
     """Verify that image strings are converted to data URLs before sending."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    openai_utils.client_async = None
+    openai_utils._clients_async.clear()
     dummy = DummyClient()
     monkeypatch.setattr(openai, "AsyncOpenAI", lambda **_: dummy)
     asyncio.run(openai_utils.get_response("Describe", images=["abc"], use_dummy=False))
@@ -40,7 +40,7 @@ def test_get_response_passes_image_detail_when_provided(monkeypatch):
     """Verify image detail is forwarded when explicitly requested."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    openai_utils.client_async = None
+    openai_utils._clients_async.clear()
     dummy = DummyClient()
     monkeypatch.setattr(openai, "AsyncOpenAI", lambda **_: dummy)
     asyncio.run(
@@ -55,7 +55,7 @@ def test_get_response_omits_image_detail_when_none_string(monkeypatch):
     """Verify the string "none" suppresses detail forwarding."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    openai_utils.client_async = None
+    openai_utils._clients_async.clear()
     dummy = DummyClient()
     monkeypatch.setattr(openai, "AsyncOpenAI", lambda **_: dummy)
     asyncio.run(

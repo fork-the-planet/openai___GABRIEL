@@ -6,6 +6,14 @@
 
 You can install the GABRIEL Python library from [PyPI](https://pypi.org/project/openai-gabriel/) with `pip install openai-gabriel` and then `import gabriel`.
 
+> **Compatibility note:** `max_output_tokens` is deprecated in GABRIEL. Existing
+> calls remain valid, but the value is ignored and emits a `FutureWarning`;
+> GABRIEL leaves the output budget to the selected model.
+
+> **Using a coding agent?** Read [`AGENTS.md`](https://github.com/openai/GABRIEL/blob/main/AGENTS.md).
+> It is the repository's shared guide to model choice, data shape, scale,
+> checkpoints, and quality assurance.
+
 Read our blog post [here](https://openai.com/index/scaling-social-science-research/), our paper with validation experiments and applied examples [here](http://www.nber.org/papers/w34834), and submit feedback / bugs / feature requests [here](https://forms.gle/RKnBskuiZ64Wt9D66).
 
 ## Table of contents
@@ -13,9 +21,9 @@ Read our blog post [here](https://openai.com/index/scaling-social-science-resear
 - [Why GABRIEL?](#why-gabriel)
 - [What can you do with GABRIEL?](#what-can-you-do-with-gabriel)
 - [Installation](#installation)
+- [Using GABRIEL with coding agents](#using-gabriel-with-coding-agents)
 - [Quick start](#quick-start)
 - [Task highlights](#task-highlights)
-- [Detailed usage](#detailed-usage)
 - [Multimodal data and web search](#multimodal-data-and-web-search)
 - [Custom prompts and model routing](#custom-prompts-and-model-routing)
 - [Saving, logging, and resuming](#saving-logging-and-resuming)
@@ -42,7 +50,7 @@ The tutorial notebook walks through these ideas step-by-step—from setting up a
 | `gabriel.rate` | Asks GPT to score each text / image / audio / item on natural language attributes. Output = 0-100 rating. | Measure “populist rhetoric” in a speech; “toxicity” of tweets; “luxury” in ad images. |
 | `gabriel.rank` | Pairwise comparisons between texts yields ELO-like attribute ratings. Output = grounded, relative z scores for each text. | Rank technologies by “bulkiness” or artworks by “fine brushwork”. |
 | `gabriel.classify` | Classifies texts / images / audio / items on whether provided labels apply. Output = one or more classes per item. | Tag news articles, product photos, or interview clips into topical categories. |
-| `gabriel.extract` | Structured fact extraction on each item. Output = string / numeric values. | For each product, provide the “company”, “CEO”, and “year of invention”. |
+| `gabriel.extract` | Structured fact or entity extraction. One source can return one row or expand into several extracted-entity rows. | Extract every product and its name, price, description, and color from each catalog page. |
 | `gabriel.discover` | Discovers natural language features which discriminate two classes of data. | Identify what distinguishes 5 star vs. 1 star reviews or successful vs. failed startups. |
 
 ### B) Clean data
@@ -60,7 +68,7 @@ The tutorial notebook walks through these ideas step-by-step—from setting up a
 | --- | --- | --- |
 | `gabriel.codify` | Passage coding: highlights snippets in text that match qualitative codes. | Flag sentences about “economic insecurity” in speeches; “stressors” mentioned in interview. |
 | `gabriel.compare` | Identifies similarities / differences between paired items. Output = list of differences. | Contrast op-eds from different districts; compare two ad campaigns. |
-| `gabriel.bucket` | Builds taxonomies from many terms. Output = bucket/cluster labels. | Group technologies, artworks, or HR complaints into emergent categories. |
+| `gabriel.bucket` | Proposes a compact taxonomy from many terms. Output = bucket names and definitions, not row-level assignments. | Develop candidate categories for technologies, artworks, or HR complaints, then review and apply them downstream. |
 | `gabriel.seed` | Enforces a representative distribution / diversity of seeds. | Initialize unique personas that match US population distribution. |
 | `gabriel.poll` | Seeds personas, expands them into full biographies, and surveys them. | Simulate a synthetic opinion poll on policy, values, and open-ended attitudes. |
 | `gabriel.ideate` | Generates many novel scientific theories and filters the cream of the crop. | Procure novel theories on inflation for potential research. |
@@ -87,8 +95,41 @@ Before running a GABRIEL call, declare your GPT API key:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-# or os.environ['OPENAI_API_KEY'] = "sk-..." inside a Jupyter notebook
 ```
+
+In Colab, store the key in **Secrets** under `OPENAI_API_KEY` and read it with
+`google.colab.userdata`; do not paste a real key into notebook source, chat,
+screenshots, or Git. The tutorial shows the complete setup.
+
+## Using GABRIEL with coding agents
+
+The repository's [`AGENTS.md`](https://github.com/openai/GABRIEL/blob/main/AGENTS.md)
+is a concise operating guide for coding agents. It
+explains task selection, model routing, checkpointing, multimodal inputs, and QA.
+Agents should also read `gabriel_tutorial_notebook.ipynb` closely before designing
+a workflow; it is the broadest guide to what the library can do.
+Three rules are especially important:
+
+- **Verify model slugs live.** At this documentation's last review, the exact general
+  models were `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`, and audio used
+  `gpt-audio-1.5`. Model IDs change; check the
+  [official model catalog](https://developers.openai.com/api/docs/models) and
+  [pricing](https://developers.openai.com/api/docs/pricing), plus the models
+  actually provisioned for your organization or gateway, instead of guessing or
+  copying an old example. Luna is often a sensible starting point for many
+  applications and large-scale work. For unusually subtle, knowledge-heavy, multi-constraint,
+  or writing-sensitive work, pilot Terra and Sol on representative examples and
+  use the smallest model that reliably meets the research standard.
+- **Generally keep `n_parallels=650`, including for small tests.** It is a ceiling, not a fixed worker
+  count. GABRIEL ramps up, reads rate-limit signals, retries transient failures,
+  and lowers actual concurrency when needed. Temporary retries and a few slow
+  stragglers are normal: while the run is progressing, let it finish. Raising
+  the ceiling can help a large workload when provisioned limits support more
+  throughput; lowering it may help a known deployment constraint or persistent
+  failure. A small test does not require a lower ceiling.
+- **Pilot, checkpoint, then scale.** Test a representative sample, inspect raw
+  responses and output shape, and keep `reset_files=False` to resume a compatible
+  run. Use a new `save_dir` when the model, prompt, fields, or labels change.
 
 ## Quick start
 
@@ -123,7 +164,8 @@ rate_results = await gabriel.rate(
     column_name="entity",
     attributes=attributes,
     save_dir=os.path.join(PATH, "toy_rate"),
-    model="gpt-5.4-mini",
+    model="gpt-5.6-luna",
+    n_parallels=650,  # normally leave this default unchanged
     n_runs=1,
     modality="entity",
     reset_files=True,
@@ -141,13 +183,13 @@ The tutorial notebook covers full projects end-to-end. The list below matches it
 - **`gabriel.rate`** – assign 0–100 scores per attribute across text, entities, images, audio, or web-sourced context.
 - **`gabriel.rank`** – pairwise tournaments that surface relative winners with grounded z-scores.
 - **`gabriel.classify`** – single- or multi-label tagging with label definitions and consensus columns.
-- **`gabriel.extract`** – turn passages or multimodal product cards into tidy tables with optional schemas.
+- **`gabriel.extract`** – extract typed fields or multiple entities from each passage, page, image, PDF, or audio item; one source may intentionally produce several rows.
 - **`gabriel.discover`** – contrast two labeled corpora to learn discriminating features.
 
 ### Qualitative coding and review
 - **`gabriel.codify`** highlights snippets that match qualitative codes and pairs with **`gabriel.view`** for UI-based auditing.
 - **`gabriel.compare`** contrasts paired items (drafts, policies, campaigns) with concise differences/similarities.
-- **`gabriel.bucket`** groups terms/entities into emergent taxonomies that feed back into rate/classify flows.
+- **`gabriel.bucket`** proposes bucket names and definitions from a large term universe; review that taxonomy, then use `classify` or another mapping step when row-level assignments are needed.
 
 ### Data prep and cleanup
 - **`gabriel.load`** converts folders of media into spreadsheets with clean IDs and file paths.
@@ -163,15 +205,32 @@ The tutorial notebook covers full projects end-to-end. The list below matches it
 
 Set `modality` to `text`, `entity`, `pdf`, `image`, `audio`, or `web` on any measurement helper. Pair `gabriel.load` with folders of media to build the right DataFrame, and use `web_search=True` when GPT should gather context before rating or extracting. The tutorial’s county-level example shows how to chain web search → rating → mapping in one flow.
 
+For image understanding, pass `image_detail="low"`, `"high"`, `"original"`,
+or `"auto"`; this is distinct from image-generation `quality`. Audio inputs need
+an audio-capable model and are routed through Chat Completions rather than the
+Responses API. At this documentation's 2026-07-13 review, use
+`gpt-audio-1.5`; `gpt-audio-mini` is deprecated. Verify the current audio slug
+before running an old example. Treat GABRIEL's pre-run cost estimate as rough
+for audio, tool calls, and very long contexts; consult live API pricing for the
+applicable modality and processing tier.
+
 ## Custom prompts and model routing
 
 - Add clarifications with `additional_instructions` (e.g., mandate mutually exclusive labels).
 - Swap in your own Jinja `template_path` while keeping retries and checkpoints.
 - Drop to `gabriel.whatever` for fully custom prompts, attachments, or routing logic.
+- Treat every model name in an example as a dated snapshot; verify the exact current slug and endpoint support before overriding a default.
 
 ## Saving, logging, and resuming
 
-Each run expands `save_dir` (tilde and environment variables supported), writes structured outputs (`file_name` CSV/Parquet), and saves raw model payloads under `responses/` with metadata for auditability. Leave `reset_files=False` to resume partially completed runs; delete the folder or pass `reset_files=True` to start fresh. `gabriel.view` reads these outputs for quick spot checks, and helpers like `gabriel.utils.mapmaker.MapMaker` can consume the same files for downstream visualization.
+Each run expands `save_dir` (tilde and environment variables supported), writes
+cleaned outputs, and checkpoints raw calls in task-specific files such as
+`*_raw_responses.csv`. Leave `reset_files=False` to resume a compatible partial
+run. When the research specification changes, use a fresh directory or pass
+`reset_files=True` intentionally so old responses are not mixed with a new
+prompt. Keep large generated outputs and private datasets outside the source
+repository. `gabriel.view` reads results for quick spot checks, and helpers like
+`gabriel.utils.mapmaker.MapMaker` can consume the same files downstream.
 
 ## Development and testing
 

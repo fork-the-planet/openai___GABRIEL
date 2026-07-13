@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from gabriel.core.prompt_template import PromptTemplate, resolve_template
-from gabriel.utils.openai_utils import get_all_responses, response_to_text
+from gabriel.utils.openai_utils import (
+    _discard_deprecated_max_output_tokens,
+    get_all_responses,
+    response_to_text,
+)
 from gabriel.utils.logging import announce_prompt_rendering
 from gabriel.tasks.rank import Rank, RankConfig
 from gabriel.tasks.rate import Rate, RateConfig
@@ -63,7 +67,7 @@ class IdeateConfig:
 
     save_dir: str = os.path.expanduser("~/Documents/runs")
     file_name: str = "ideation.csv"
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-terra"
     ranking_model: Optional[str] = None
     n_parallels: int = 650
     n_ideas: int = 1000
@@ -87,7 +91,7 @@ class IdeateConfig:
     seed_existing_entities_cap: Optional[int] = None
     seed_additional_instructions: Optional[str] = None
     seed_template_path: Optional[str] = None
-    seed_deduplicate: bool = True
+    seed_deduplicate: bool = False
     deduplicate_ideas: bool = True
 
     def __post_init__(self) -> None:
@@ -172,6 +176,14 @@ class Ideate:
         rank_run_kwargs = dict(rank_run_kwargs or {})
         rate_cfg_updates = dict(rate_config_updates or {})
         rate_run_kwargs = dict(rate_run_kwargs or {})
+        seed_cfg_updates = dict(seed_config_updates or {})
+        seed_run_opts = dict(seed_run_kwargs or {})
+        nested_rank_rate_kwargs = rank_cfg_updates.get("rate_kwargs")
+        if isinstance(nested_rank_rate_kwargs, dict):
+            nested_rank_rate_kwargs = dict(nested_rank_rate_kwargs)
+            rank_cfg_updates["rate_kwargs"] = nested_rank_rate_kwargs
+        else:
+            nested_rank_rate_kwargs = None
 
         use_seed = (
             self.cfg.use_seed_entities if use_seed_entities is None else use_seed_entities
@@ -181,6 +193,19 @@ class Ideate:
         )
         dedup_cfg_updates = dict(deduplicate_config_updates or {})
         dedup_run_kwargs = dict(deduplicate_run_kwargs or {})
+        _discard_deprecated_max_output_tokens(
+            gen_kwargs,
+            rank_cfg_updates,
+            rank_run_kwargs,
+            rate_cfg_updates,
+            rate_run_kwargs,
+            seed_cfg_updates,
+            seed_run_opts,
+            dedup_cfg_updates,
+            dedup_run_kwargs,
+            nested_rank_rate_kwargs,
+            stacklevel=3,
+        )
 
         raw_df, _ = await self._generate_reports(
             topic,
@@ -188,8 +213,8 @@ class Ideate:
             reset_files=reset_files,
             use_seed_entities=use_seed,
             **gen_kwargs,
-            seed_config_updates=seed_config_updates or {},
-            seed_run_kwargs=seed_run_kwargs or {},
+            seed_config_updates=seed_cfg_updates,
+            seed_run_kwargs=seed_run_opts,
         )
         parsed_df = self._parse_reports(raw_df, topic)
         self._print_random_previews(parsed_df)

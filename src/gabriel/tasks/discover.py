@@ -23,7 +23,7 @@ class DiscoverConfig:
     """Configuration for :class:`Discover`."""
 
     save_dir: str = "discover"
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-terra"
     n_parallels: int = 650
     n_runs: int = 1
     min_frequency: float = 0.6

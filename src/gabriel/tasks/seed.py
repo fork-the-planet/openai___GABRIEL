@@ -26,7 +26,7 @@ class SeedConfig:
     instructions: str
     save_dir: str = os.path.expanduser("~/Documents/runs")
     file_name: str = "seed_entities.csv"
-    model: str = "gpt-5.5"
+    model: str = "gpt-5.6-sol"
     n_parallels: int = 650
     num_entities: int = 1000
     entities_per_generation: int = 50

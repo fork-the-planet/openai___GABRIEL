@@ -28,7 +28,7 @@ from .api import (
 from .utils import load
 
 try:
-    __version__ = _v("gabriel")
+    __version__ = _v("openai-gabriel")
 except PackageNotFoundError:  # pragma: no cover - package not installed
     from ._version import __version__
 

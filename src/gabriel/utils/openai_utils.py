@@ -9,11 +9,10 @@ OpenAI Responses API with several improvements:
 * User‑friendly summary – before a long job starts, the module prints a
   summary showing the number of prompts, input words, remaining rate‑limit
   capacity, usage tier qualifications, and an estimated cost.
-* Improved rate‑limit gating – the token limiter now estimates the worst
-  possible output length when the cutoff is unspecified by assuming
-  the response could be as long as the input.  This avoids grossly
-  underestimating throughput while still honouring the per‑minute token
-  budget.
+* Improved rate‑limit gating – the token limiter plans around an estimated
+  output length without imposing that estimate on the model.  This avoids
+  grossly underestimating throughput while leaving output budgeting to the
+  selected model.
 * Exponential backoff with jitter – the retry logic uses a random
   exponential backoff when rate‑limit errors occur, following OpenAI’s
   guidelines for handling 429 responses.
@@ -41,6 +40,7 @@ import time
 import subprocess
 import sys
 import textwrap
+import warnings
 from typing import (
     Any,
     Awaitable,
@@ -77,6 +77,45 @@ logger = get_logger(__name__)
 # static "info sheet" content on subsequent runs.
 _USAGE_SHEET_PRINTED = False
 _DEPENDENCIES_VERIFIED = False
+
+_MAX_OUTPUT_TOKENS_DEPRECATION_MESSAGE = (
+    "`max_output_tokens` is deprecated and ignored by GABRIEL; it no longer "
+    "limits model output. Remove this argument and let the selected model use "
+    "its native output budget."
+)
+
+
+def _ignore_deprecated_max_output_tokens(
+    value: Any, *, stacklevel: int = 2
+) -> None:
+    """Warn about the retained compatibility argument and discard its value."""
+
+    if value is not None:
+        warnings.warn(
+            _MAX_OUTPUT_TOKENS_DEPRECATION_MESSAGE,
+            FutureWarning,
+            stacklevel=stacklevel,
+        )
+    return None
+
+
+def _discard_deprecated_max_output_tokens(
+    *mappings: Optional[Dict[str, Any]], stacklevel: int = 2
+) -> None:
+    """Remove the retired option from copied override mappings and warn once."""
+
+    supplied = False
+    for mapping in mappings:
+        if mapping is None or "max_output_tokens" not in mapping:
+            continue
+        supplied = mapping.pop("max_output_tokens") is not None or supplied
+    if supplied:
+        warnings.warn(
+            _MAX_OUTPUT_TOKENS_DEPRECATION_MESSAGE,
+            FutureWarning,
+            stacklevel=stacklevel,
+        )
+
 
 # Cap the number of prompts we fully scan when estimating words/tokens.  Large
 # datasets are sampled to keep start-up time predictable.
@@ -226,10 +265,8 @@ def _get_client(
         _clients_async[url] = client
     return client
 
-# Estimated output tokens per prompt used for cost estimation when no cutoff is specified.
-# When a user does not explicitly set ``max_output_tokens``, we assume that each response
-# will contain roughly this many tokens.  This value is used solely for estimating cost
-# and determining how many parallel requests can safely run under the token budget.
+# Estimated output tokens per prompt used solely for cost and throughput planning.
+# GABRIEL does not forward this estimate as an API output limit.
 ESTIMATED_OUTPUT_TOKENS_PER_PROMPT = 500
 # Extra input tokens to add per prompt when estimating non-text inputs or web search.
 NON_TEXT_INPUT_TOKEN_BUFFER = 2000
@@ -448,6 +485,11 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
         "batch": 0.5,
     },
     "gpt-5.2": {"input": 1.75, "cached_input": 0.175, "output": 14.00, "batch": 0.5},
+    # ``gpt-5.6`` is the documented alias for GPT-5.6 Sol.
+    "gpt-5.6": {"input": 5.00, "cached_input": 0.50, "output": 30.00, "batch": 0.5},
+    "gpt-5.6-sol": {"input": 5.00, "cached_input": 0.50, "output": 30.00, "batch": 0.5},
+    "gpt-5.6-terra": {"input": 2.50, "cached_input": 0.25, "output": 15.00, "batch": 0.5},
+    "gpt-5.6-luna": {"input": 1.00, "cached_input": 0.10, "output": 6.00, "batch": 0.5},
     "gpt-5.5": {"input": 5.00, "cached_input": 0.50, "output": 30.00, "batch": 0.5},
     "gpt-5.1": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
     "gpt-5": {"input": 1.25, "cached_input": 0.125, "output": 10.00, "batch": 0.5},
@@ -566,11 +608,10 @@ def _decide_default_max_output_tokens(
     max_output_tokens: Optional[int],
     rate_headers: Optional[Dict[str, str]],
 ) -> Optional[int]:
-    """Choose a default max output token cap when the user leaves it unset."""
+    """Compatibility shim for the retired output-token cutoff."""
 
-    if max_output_tokens is not None:
-        return max_output_tokens
-    return None
+    del rate_headers
+    return _ignore_deprecated_max_output_tokens(max_output_tokens, stacklevel=3)
 
 
 def _lookup_model_pricing(model: str) -> Optional[Dict[str, float]]:
@@ -580,7 +621,7 @@ def _lookup_model_pricing(model: str) -> Optional[Dict[str, float]]:
     best_match: Optional[Dict[str, float]] = None
     best_len = -1
     for prefix, pricing in MODEL_PRICING.items():
-        if key.startswith(prefix) and len(prefix) > best_len:
+        if (key == prefix or key.startswith(f"{prefix}-")) and len(prefix) > best_len:
             best_match = pricing
             best_len = len(prefix)
     return best_match
@@ -602,9 +643,11 @@ def _estimate_cost(
 
     Returns a dict with keys ``input_tokens``, ``output_tokens``, ``input_cost``, ``output_cost``, and ``total_cost``.
     If the model pricing is unavailable, returns ``None``.
-    ``estimated_output_tokens_per_prompt`` controls the assumed output length when no
-    explicit ``max_output_tokens`` is supplied.
+    ``estimated_output_tokens_per_prompt`` controls the assumed output length.
+    ``max_output_tokens`` is retained only for internal call-site compatibility
+    and has no effect.
     """
+    del max_output_tokens
     pricing = _lookup_model_pricing(model)
     if pricing is None:
         return None
@@ -628,11 +671,7 @@ def _estimate_cost(
     # number of output tokens per prompt.  This prevents the cost estimate from
     # ballooning for long inputs, which previously assumed the output could be as long
     # as the input.
-    if max_output_tokens is None:
-        # Use the per‑prompt estimate for each response
-        output_tokens = estimated_output_tokens_per_prompt * max(1, n) * len(prompts)
-    else:
-        output_tokens = max_output_tokens * max(1, n) * len(prompts)
+    output_tokens = estimated_output_tokens_per_prompt * max(1, n) * len(prompts)
     cost_in = (input_tokens / 1_000_000) * pricing["input"]
     cost_out = (output_tokens / 1_000_000) * pricing["output"]
     if use_batch:
@@ -1017,7 +1056,7 @@ def _require_api_key() -> str:
 
 
 def _get_rate_limit_headers(
-    model: str = "gpt-5.4-mini", base_url: Optional[str] = None
+    model: str = "gpt-5.6-terra", base_url: Optional[str] = None
 ) -> Optional[Dict[str, str]]:
     """Retrieve rate‑limit headers via a cheap API request.
 
@@ -1029,8 +1068,7 @@ def _get_rate_limit_headers(
     may in the future.  To accommodate current and future behaviour, this
     helper first tries a minimal call against the Responses endpoint and
     falls back to a tiny call against the Chat completions endpoint when
-    the headers are absent.  Both calls cap generation at one token to
-    minimise usage.
+    the headers are absent. Both prompts request a minimal acknowledgement.
 
     :param model: The model to use for the dummy request.  Matching the
       model you intend to use yields the most accurate limits.
@@ -1047,7 +1085,7 @@ def _get_rate_limit_headers(
     # headers【360365694688557†L209-L243】, but OpenAI may add them in the future.  We try
     # the Responses endpoint first to see if headers are now included; if
     # missing, we fall back to a minimal call to the chat completions
-    # endpoint.  Both calls cap generation at one token to minimise usage.
+    # endpoint.
     candidates: List[Tuple[str, Dict[str, Any]]] = []
     # Responses API payload (first attempt)
     candidates.append(
@@ -1056,10 +1094,9 @@ def _get_rate_limit_headers(
             {
                 "model": model,
                 "input": [
-                    {"role": "user", "content": "Hello"},
+                    {"role": "user", "content": "Reply only: OK"},
                 ],
                 "truncation": "auto",
-                "max_output_tokens": 1,
             },
         )
     )
@@ -1070,9 +1107,8 @@ def _get_rate_limit_headers(
             {
                 "model": model,
                 "messages": [
-                    {"role": "user", "content": "Hello"},
+                    {"role": "user", "content": "Reply only: OK"},
                 ],
-                "max_tokens": 1,
             },
         )
     )
@@ -1153,6 +1189,7 @@ def _print_usage_overview(
     skip the header) and ``show_prompt_stats`` suppresses the redundant prompt
     counts when the run banner already printed them.
     """
+    del max_output_tokens
     if not verbose:
         return
     if heading:
@@ -1226,7 +1263,7 @@ def _print_usage_overview(
         )
         tokens_per_call = _estimate_tokens_per_call(
             avg_input_tokens,
-            max_output_tokens,
+            None,
             n,
             estimated_output_tokens_per_prompt=estimated_output_tokens_per_prompt,
             output_headroom=OUTPUT_TOKEN_HEADROOM_INITIAL,
@@ -1365,12 +1402,6 @@ def _print_usage_overview(
             monthly_text = f"; monthly quota {monthly}" if monthly else ""
             print(f"  • {tier['tier']}: qualify by {tier['qualification']}{monthly_text}")
         print("\nAdd funds or manage your billing here: https://platform.openai.com/settings/organization/billing/")
-    if max_output_tokens is not None:
-        print(
-            f"\nmax_output_tokens: {max_output_tokens} (safety cutoff; generation will stop if this is reached)"
-        )
-
-
 def _rate_limit_decrement(concurrency_cap: int) -> int:
     """Return a downward step that curbs rate-limit thrash aggressively."""
 
@@ -1706,13 +1737,13 @@ def _build_params(
     Parameters
     ----------
     model:
-        Identifier of the model to query (e.g. ``"gpt-5.4-mini"``).
+        Identifier of the model to query (e.g. ``"gpt-5.6-terra"``).
     input_data:
         A list representing the conversation so far.  Each element is a mapping
         with ``role`` and ``content`` keys in the format required by the API.
     max_output_tokens:
-        Soft cap on the number of tokens the model may generate.  When ``None``
-        the parameter is omitted and the model's server-side default applies.
+        Deprecated compatibility argument. Any supplied value is ignored and
+        the model's native output budget applies.
     temperature:
         Sampling temperature controlling randomness for legacy models that
         honour it.
@@ -1765,14 +1796,20 @@ def _build_params(
         "input": input_data,
         "truncation": "auto",
     }
+    max_output_tokens = _ignore_deprecated_max_output_tokens(max_output_tokens)
     resolved_service_tier = _normalise_service_tier(service_tier)
     if resolved_service_tier is not None:
         params["service_tier"] = resolved_service_tier
-    if max_output_tokens is not None:
-        params["max_output_tokens"] = max_output_tokens
     if json_mode:
         params["text"] = (
-            {"format": {"type": "json_schema", "schema": expected_schema}}
+            {
+                "format": {
+                    "type": "json_schema",
+                    "name": "gabriel_structured_response",
+                    "strict": True,
+                    "schema": expected_schema,
+                }
+            }
             if expected_schema
             else {"format": {"type": "json_object"}}
         )
@@ -1826,7 +1863,7 @@ def _build_params(
 async def get_response(
     prompt: str,
     *,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     n: int = 1,
     max_output_tokens: Optional[int] = None,
     timeout: Optional[float] = None,
@@ -1880,7 +1917,8 @@ async def get_response(
         Number of completions to request.  Each completion is retrieved in
         parallel.
     max_output_tokens:
-        Optional cap on the length of each completion in tokens.
+        Deprecated compatibility argument. Any supplied value is ignored and
+        emits a :class:`FutureWarning`.
     timeout:
         Maximum time in seconds to wait for the API to respond.  ``None``
         disables client-side timeouts.
@@ -1932,10 +1970,9 @@ async def get_response(
     background_mode:
         When ``True`` the helper submits the request in background mode and
         polls :meth:`openai.AsyncOpenAI.responses.retrieve` until completion.
-        When ``None`` (default) the helper automatically enables background
-        mode whenever ``timeout`` is ``None`` so long-running calls are resilient
-        to transient HTTP disconnects.  Set to ``False`` to force the legacy
-        behaviour of waiting on the initial HTTP response.
+        ``None`` (default) leaves background mode unspecified so the API uses
+        its ordinary synchronous behavior. Set to ``False`` to explicitly
+        disable background submission.
     background_poll_interval:
         How frequently (in seconds) to poll for background completion when
         background mode is active. Defaults to 10 seconds and automatically
@@ -1951,6 +1988,7 @@ async def get_response(
         ``return_raw`` is ``True`` the third element contains the raw response
         objects from the SDK.
     """
+    max_output_tokens = _ignore_deprecated_max_output_tokens(max_output_tokens)
     if web_search_filters and not web_search:
         logger.debug(
             "web_search_filters were supplied but web_search is disabled; ignoring filters."
@@ -2095,8 +2133,8 @@ async def get_response(
                 if consecutive_errors >= 5:
                     raise
                 continue
-    # Derive the effective cutoff
-    cutoff = max_output_tokens
+    # GABRIEL intentionally leaves output budgeting to the selected model.
+    cutoff = None
     system_instruction = DEFAULT_SYSTEM_INSTRUCTION
     legacy_system_instruction = _uses_legacy_system_instruction(model)
     if audio:
@@ -3605,7 +3643,7 @@ async def get_all_responses(
     prompt_pdfs: Optional[Dict[str, List[Dict[str, str]]]] = None,
     prompt_web_search_filters: Optional[Dict[str, Dict[str, Any]]] = None,
     *,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     modality: Optional[str] = None,
     image_detail: Optional[str] = None,
     n: int = 1,
@@ -3640,7 +3678,9 @@ async def get_all_responses(
     # details on how the concurrency cap is calculated.  When web
     # search or media inputs are enabled the helper automatically lowers
     # this ceiling to half of the requested value to avoid overwhelming
-    # the API or tool backends.
+    # the API or tool backends. Keep the default unchanged. Temporary
+    # retries and slow stragglers are normal; let a progressing run finish,
+    # and reduce this only for a persistent failure or known deployment limit.
     n_parallels: int = 650,
     ramp_up_seconds: float = 15.0,
     ramp_up_start_fraction: float = 0.2,
@@ -3691,10 +3731,12 @@ async def get_all_responses(
     ``skip_tail_fails=False`` to preserve the previous behavior and retry every
     incomplete row on resume.
 
-    When no ``max_output_tokens`` cutoff is supplied, the helper assumes each
-    response will contain roughly ``estimated_output_tokens_per_prompt`` tokens
-    (default: 400) for cost and throughput planning.  Adjust this parameter if
-    you expect substantially longer or shorter generations.
+    ``max_output_tokens`` is retained only for call-site compatibility. Any
+    supplied value is ignored with a warning. The helper assumes each response
+    will contain roughly ``estimated_output_tokens_per_prompt`` tokens (default:
+    500) for cost and throughput planning, but never forwards that estimate as
+    an API output limit. Adjust the estimate if you expect substantially longer
+    or shorter generations.
 
     A dynamic timeout mechanism keeps long‑running jobs efficient: the function
     initially allows unlimited time for each request, then observes how long
@@ -3702,12 +3744,10 @@ async def get_all_responses(
     observed durations.  Subsequent calls use this timeout (capped by
     ``max_timeout`` if provided) and it is increased if later responses are
     slower.  Any request exceeding the current limit is cancelled and retried.
-    While the
-    timeout is unbounded the helper automatically submits requests in
-    background mode and polls for completion so that connections closed by the
-    server or networking layer do not strand in-flight prompts.  You can force
-    or disable this behaviour with ``background_mode`` and adjust the polling
-    cadence via ``background_poll_interval``.
+    Set ``background_mode=True`` to submit requests in background mode and poll
+    for completion, which can make long-running calls more resilient to a
+    transient HTTP disconnect. Adjust the polling cadence with
+    ``background_poll_interval``.
 
     Concurrency adapts gently to sustained rate‑limit or connection‑error
     pressure.  Rolling windows (``rate_limit_window`` and
@@ -3809,6 +3849,7 @@ async def get_all_responses(
     all other internal processing.
 """
     global _USAGE_SHEET_PRINTED
+    max_output_tokens = _ignore_deprecated_max_output_tokens(max_output_tokens)
     message_verbose = bool(verbose and not quiet)
     set_log_level(logging_level)
     logger = get_logger(__name__)
@@ -4134,7 +4175,6 @@ async def get_all_responses(
         _get_client(base_url, desired_parallelism=user_requested_n_parallels)
     web_search_warning_displayed = False
     web_search_note_displayed = False
-    # Decide default cutoff once per job using cached rate headers
     # Fetch rate headers once to avoid multiple API calls
     # Retrieve rate‑limit headers for the chosen model.  Passing the model
     # ensures the helper performs a dummy call with the correct model
@@ -4144,8 +4184,8 @@ async def get_all_responses(
         if manage_rate_limits
         else {}
     )
-    cutoff = max_output_tokens
-    get_response_kwargs.setdefault("max_output_tokens", cutoff)
+    cutoff = None
+    get_response_kwargs.pop("max_output_tokens", None)
     initial_estimated_output_tokens = (
         cutoff if cutoff is not None else estimated_output_tokens_per_prompt
     )
@@ -4636,7 +4676,7 @@ async def get_all_responses(
             for prompt, ident in todo_pairs:
                 imgs = prompt_images.get(str(ident)) if prompt_images else None
                 pdfs = prompt_pdfs.get(str(ident)) if prompt_pdfs else None
-                model_name = get_response_kwargs.get("model", "gpt-5.4-mini")
+                model_name = get_response_kwargs.get("model", "gpt-5.6-terra")
                 legacy_system_instruction = _uses_legacy_system_instruction(model_name)
                 if imgs or pdfs:
                     contents: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
@@ -6749,9 +6789,15 @@ async def get_all_responses(
     workers: List[asyncio.Task] = []
 
     def _desired_worker_count() -> int:
+        # Workers remove items from ``queue`` before waiting for a ramped or
+        # dynamically reduced concurrency slot.  Using ``queue.qsize()`` here
+        # therefore made the spawner plateau around half the remaining work
+        # (e.g. 500 workers for a 1,000-row run).  Base the desired pool on all
+        # unfinished rows instead: active and waiting workers still count.
+        unfinished = max(0, status.num_tasks_started - processed)
         return max(
             1,
-            min(_effective_parallel_ceiling(), _current_parallel_cap(), queue.qsize()),
+            min(_effective_parallel_ceiling(), _current_parallel_cap(), unfinished),
         )
 
     async def worker_spawner() -> None:

@@ -34,7 +34,7 @@ class ExtractConfig:
     attributes: Dict[str, str]
     save_dir: str = "extraction"
     file_name: str = "extraction.csv"
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-luna"
     n_parallels: int = 650
     n_runs: int = 1
     use_dummy: bool = False
@@ -72,6 +72,14 @@ class Extract:
         self, raw: Any, attrs: List[str]
     ) -> List[Tuple[Optional[str], Dict[str, str]]]:
         obj = await safest_json(raw)
+        # Checkpointed Responses API text is commonly serialized as a
+        # one-item JSON array whose item is itself the model's JSON string.
+        # Unwrap that representation before applying the entity/list parser.
+        for _ in range(3):
+            if isinstance(obj, list) and len(obj) == 1 and isinstance(obj[0], str):
+                obj = await safest_json(obj[0])
+                continue
+            break
         attr_names = list(attrs)
 
         def _default_attr_map() -> Dict[str, str]:
@@ -408,7 +416,7 @@ class Extract:
         if base_attrs:
             agg_series = {
                 attr: full_df[attr]
-                .groupby(level=["id", "entity_name"], sort=False)
+                .groupby(level=["id", "entity_name"], sort=False, dropna=False)
                 .apply(_pick_first)
                 for attr in base_attrs
             }

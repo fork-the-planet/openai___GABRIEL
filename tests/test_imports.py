@@ -1,9 +1,15 @@
 from importlib import import_module
+from importlib.metadata import version
 import asyncio
 import pytest
 
 def test_import_gabriel():
     assert import_module("gabriel")
+
+
+def test_package_version_matches_distribution_metadata():
+    gabriel = import_module("gabriel")
+    assert gabriel.__version__ == version("openai-gabriel")
 
 
 def test_viewer_exposed():

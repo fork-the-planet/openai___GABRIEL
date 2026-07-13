@@ -3,6 +3,7 @@ import json
 from typing import Any, Dict, List
 
 import pandas as pd
+import pytest
 
 import gabriel
 
@@ -84,22 +85,23 @@ def test_poll_with_population_description_batches_questions_and_returns_columns(
 
     monkeypatch.setattr("gabriel.tasks.poll.Seed.run", fake_seed_run)
 
-    result = asyncio.run(
-        gabriel.poll(
-            population_description="a representative sample of the United States population",
-            questions=[
-                "Rate support from 1 to 7 using an integer only.",
-                "Return true or false only: would you vote for this policy?",
-                "In English only, briefly explain why.",
-            ],
-            save_dir=str(tmp_path / "poll"),
-            num_personas=2,
-            n_questions_per_run=2,
-            max_output_tokens=123,
-            web_search=True,
-            get_all_responses_fn=fake_get_all_responses,
+    with pytest.warns(FutureWarning, match="deprecated and ignored") as caught:
+        result = asyncio.run(
+            gabriel.poll(
+                population_description="a representative sample of the United States population",
+                questions=[
+                    "Rate support from 1 to 7 using an integer only.",
+                    "Return true or false only: would you vote for this policy?",
+                    "In English only, briefly explain why.",
+                ],
+                save_dir=str(tmp_path / "poll"),
+                num_personas=2,
+                n_questions_per_run=2,
+                max_output_tokens=123,
+                web_search=True,
+                get_all_responses_fn=fake_get_all_responses,
+            )
         )
-    )
 
     assert list(result["seed"]) == [
         "Young Phoenix retail worker living with cousins and juggling community college.",
@@ -116,10 +118,11 @@ def test_poll_with_population_description_batches_questions_and_returns_columns(
     ]
     assert captured_seed_kwargs["reset_files"] is False
     assert len(stage_calls) == 2
+    assert len(caught) == 1
     assert stage_calls[0]["json_mode"] is False
     assert stage_calls[1]["json_mode"] is True
-    assert stage_calls[0]["max_output_tokens"] == 123
-    assert stage_calls[1]["max_output_tokens"] == 123
+    assert stage_calls[0]["max_output_tokens"] is None
+    assert stage_calls[1]["max_output_tokens"] is None
     assert stage_calls[0]["web_search"] is None
     assert stage_calls[1]["web_search"] is True
     assert len(stage_calls[1]["identifiers"]) == 4

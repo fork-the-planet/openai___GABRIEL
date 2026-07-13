@@ -25,7 +25,7 @@ from ..utils.file_utils import save_dataframe_with_fallback
 class DeidentifyConfig:
     """Configuration for :class:`Deidentifier`."""
 
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-terra"
     n_parallels: int = 650
     save_dir: str = "deidentify"
     file_name: str = "deidentified.csv"

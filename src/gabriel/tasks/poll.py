@@ -32,9 +32,9 @@ class PollConfig:
     file_name: str = "poll_results.csv"
     seed_file_name: str = "poll_seeds.csv"
     persona_file_name: str = "poll_personas.csv"
-    seed_model: str = "gpt-5.5"
-    persona_model: str = "gpt-5.5"
-    poll_model: str = "gpt-5.5"
+    seed_model: str = "gpt-5.6-sol"
+    persona_model: str = "gpt-5.6-sol"
+    poll_model: str = "gpt-5.6-sol"
     n_parallels: int = 650
     num_personas: int = 1000
     entities_per_generation: int = 50

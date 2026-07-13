@@ -27,6 +27,7 @@ from .paraphrase import Paraphrase, ParaphraseConfig
 from .rank import Rank, RankConfig
 from .rate import Rate, RateConfig
 from ..utils.file_utils import save_dataframe_with_fallback
+from ..utils.openai_utils import _discard_deprecated_max_output_tokens
 try:  # statsmodels is optional; fall back to a lightweight solver if missing
     from ..utils.plot_utils import fit_ols as _fit_ols
     from ..utils.plot_utils import regression_plot as _regression_plot
@@ -260,7 +261,7 @@ class DebiasConfig:
     strip_percentages: Optional[List[int]] = None
     categories_to_strip: Optional[List[str]] = None
     template_path: Optional[str] = None
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-terra"
     n_parallels: int = 650
     measurement_kwargs: Dict[str, Any] = field(default_factory=dict)
     removal_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -425,6 +426,18 @@ class DebiasPipeline:
 
         self.cfg.measurement_kwargs = dict(self.cfg.measurement_kwargs or {})
         self.cfg.removal_kwargs = dict(self.cfg.removal_kwargs or {})
+        nested_rate_kwargs = self.cfg.measurement_kwargs.get("rate_kwargs")
+        if isinstance(nested_rate_kwargs, dict):
+            nested_rate_kwargs = dict(nested_rate_kwargs)
+            self.cfg.measurement_kwargs["rate_kwargs"] = nested_rate_kwargs
+        else:
+            nested_rate_kwargs = None
+        _discard_deprecated_max_output_tokens(
+            self.cfg.measurement_kwargs,
+            self.cfg.removal_kwargs,
+            nested_rate_kwargs,
+            stacklevel=3,
+        )
 
     # ------------------------------------------------------------------
     async def run(

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openai-gabriel"
-version = "1.1.8"
+version = "1.1.9"
 description = "LLM-based library to measure quantitative attributes on qualitative data"
 authors = [
     {name = "Hemanth Asirvatham"},
@@ -12,7 +12,7 @@ authors = [
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 keywords = [
     "llm",
     "gpt",
@@ -34,9 +34,6 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -44,7 +41,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "openai>=1.0.0",
+    "openai>=1.109.1",
     "pandas>=1.0.0",
     "numpy>=1.18.0",
     "Jinja2>=3.0.0",

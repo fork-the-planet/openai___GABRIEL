@@ -11,7 +11,7 @@ import pandas as pd
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.S)
 
 # model used when an LLM is required to reformat malformed JSON
-JSON_LLM_MODEL = os.getenv("JSON_LLM_MODEL", "gpt-5.4-mini")
+JSON_LLM_MODEL = os.getenv("JSON_LLM_MODEL", "gpt-5.6-terra")
 
 
 def _parse_json(txt: Any) -> Union[dict, list]:
@@ -192,7 +192,7 @@ async def clean_json_df(
     columns: List[str],
     *,
     id_col: str,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     exclude_valid_json: bool = False,
     save_path: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
@@ -212,7 +212,7 @@ async def clean_json_df(
         raised if the column is missing or contains duplicate values.
     model:
         Model name passed to :func:`get_all_responses` when attempting to
-        repair invalid JSON. Defaults to ``"gpt-5.4-mini"``.
+        repair invalid JSON. Defaults to ``"gpt-5.6-terra"``.
     reasoning_effort:
         Reasoning effort level forwarded to the model.
     reasoning_summary:

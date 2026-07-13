@@ -31,7 +31,7 @@ from ._run_utils import (
 class CompareConfig:
     save_dir: str = "comparison"
     file_name: str = "comparison_responses.csv"
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-terra"
     n_parallels: int = 650
     n_runs: int = 1
     use_dummy: bool = False

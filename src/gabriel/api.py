@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 import inspect
@@ -43,7 +45,12 @@ from .tasks import (
     Ideate,
     IdeateConfig,
 )
-from .utils.openai_utils import get_all_responses, get_response
+from .utils.openai_utils import (
+    _discard_deprecated_max_output_tokens,
+    _ignore_deprecated_max_output_tokens,
+    get_all_responses,
+    get_response,
+)
 from .utils.passage_viewer import view as _view_passages
 from .tasks.debias import (
     DebiasConfig,
@@ -166,7 +173,9 @@ def _split_cfg_and_response_kwargs(
     unknown_keys: List[str] = []
 
     for key, value in extra_kwargs.items():
-        if key in cfg_fields:
+        if key == "max_output_tokens":
+            _ignore_deprecated_max_output_tokens(value, stacklevel=4)
+        elif key in cfg_fields:
             cfg_overrides[key] = value
         elif key in _OPENAI_RESPONSE_OVERRIDES:
             response_overrides[key] = value
@@ -178,7 +187,7 @@ def _split_cfg_and_response_kwargs(
         raise TypeError(
             f"Unknown keyword argument(s) for gabriel.{task_name}: {unknown_display}. "
             "Pass task configuration keys, or OpenAI response kwargs such as "
-            "`image_detail` / `max_output_tokens`."
+            "`image_detail` / `reasoning_effort`."
         )
 
     return cfg_overrides, response_overrides
@@ -191,7 +200,7 @@ async def rate(
     attributes: Dict[str, str],
     save_dir: str,
     additional_instructions: Optional[str] = None,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-luna",
     n_parallels: int = 650,
     n_runs: int = 1,
     n_attributes_per_run: Optional[int] = None,
@@ -228,9 +237,15 @@ async def rate(
     additional_instructions:
         Optional extra guidance injected into the prompt template.
     model:
-        Model name passed through to the OpenAI Responses API.
+        Model name passed through to the OpenAI Responses API. The signature
+        default was current when this package version shipped; model IDs change,
+        so verify the exact slug in the official OpenAI model catalog before
+        overriding it.
     n_parallels:
-        Maximum number of concurrent requests to issue.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     n_runs:
         Number of repeat rating passes to perform for each passage.
     n_attributes_per_run:
@@ -310,7 +325,7 @@ async def extract(
     attributes: Dict[str, str],
     save_dir: str,
     additional_instructions: Optional[str] = None,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-luna",
     n_parallels: int = 650,
     n_runs: int = 1,
     n_attributes_per_run: Optional[int] = None,
@@ -344,9 +359,16 @@ async def extract(
     additional_instructions:
         Optional extra guidance injected into the extraction prompt.
     model:
-        Model used for extraction via the OpenAI Responses API.
+        Model used for extraction via the OpenAI Responses API. Luna is the
+        scale-first default for most extraction work. Pilot Terra or Sol when
+        the task is unusually subtle, knowledge-heavy, or writing-sensitive.
+        Model IDs and organization provisioning change, so verify the exact
+        available slug before overriding it.
     n_parallels:
-        Maximum number of concurrent extraction calls.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     n_runs:
         Number of extraction passes to perform; results are averaged when
         applicable.
@@ -425,7 +447,7 @@ async def seed(
     *,
     save_dir: str,
     file_name: str = "seed_entities.csv",
-    model: str = "gpt-5.5",
+    model: str = "gpt-5.6-sol",
     n_parallels: int = 650,
     num_entities: int = 1000,
     entities_per_generation: int = 50,
@@ -459,9 +481,14 @@ async def seed(
     file_name:
         Name of the CSV to write seed entities to.
     model:
-        Model used for generation.
+        Model used for generation. The signature default was current when this
+        package version shipped; model IDs change, so verify the exact slug in
+        the official OpenAI model catalog before overriding it.
     n_parallels:
-        Maximum number of concurrent generation calls.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     num_entities:
         Target number of entities to generate in total.
     entities_per_generation:
@@ -501,7 +528,8 @@ async def seed(
         deduplication. It must accept ``texts`` and ``identifiers``.
     **response_kwargs:
         Additional keyword arguments forwarded to
-        :func:`gabriel.utils.openai_utils.get_all_responses`.
+        :func:`gabriel.utils.openai_utils.get_all_responses`. The deprecated
+        ``max_output_tokens`` argument is accepted, warned about, and ignored.
 
     Returns
     -------
@@ -509,6 +537,8 @@ async def seed(
         DataFrame of seed entities with provenance metadata.
     """
 
+    response_kwargs = dict(response_kwargs)
+    _discard_deprecated_max_output_tokens(response_kwargs, stacklevel=3)
     save_dir = os.path.expandvars(os.path.expanduser(save_dir))
     os.makedirs(save_dir, exist_ok=True)
     cfg = SeedConfig(
@@ -547,7 +577,7 @@ async def poll(
     file_name: str = "poll_results.csv",
     seed_file_name: str = "poll_seeds.csv",
     persona_file_name: str = "poll_personas.csv",
-    model: str = "gpt-5.5",
+    model: str = "gpt-5.6-sol",
     seed_model: Optional[str] = None,
     persona_model: Optional[str] = None,
     poll_model: Optional[str] = None,
@@ -607,11 +637,17 @@ async def poll(
         CSV used for the generated personas before question answering.
     model:
         Default model used for all three stages unless a stage-specific model is
-        provided.
+        provided. The signature default was current when this package version
+        shipped; model IDs change, so verify the exact slug in the official
+        OpenAI model catalog before overriding it.
     seed_model / persona_model / poll_model:
-        Optional model overrides for each stage.
+        Optional model overrides for each stage. Verify every override against
+        the current official model catalog rather than copying a stale example.
     n_parallels:
-        Maximum concurrent requests for persona generation and polling.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     num_personas:
         Number of synthetic respondents to create when seeding a population.
     entities_per_generation / entity_batch_frac / existing_entities_cap /
@@ -638,8 +674,9 @@ async def poll(
     **cfg_kwargs:
         Additional overrides applied to :class:`gabriel.tasks.poll.PollConfig`.
         Keys matching :func:`gabriel.utils.openai_utils.get_all_responses` /
-        :func:`gabriel.utils.openai_utils.get_response` (for example
-        ``max_output_tokens``) are forwarded to model calls.
+        :func:`gabriel.utils.openai_utils.get_response` are forwarded to model
+        calls. The legacy ``max_output_tokens`` key is accepted but ignored
+        with a warning.
 
     Returns
     -------
@@ -716,7 +753,7 @@ async def classify(
     labels: Dict[str, str],
     save_dir: str,
     additional_instructions: Optional[str] = None,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-luna",
     differentiate: bool = False,
     circle_column_name: Optional[str] = None,
     square_column_name: Optional[str] = None,
@@ -755,13 +792,18 @@ async def classify(
     additional_instructions:
         Free-form instructions appended to the classification prompt.
     model:
-        Model name used for classification.
+        Model name used for classification. The signature default was current
+        when this package version shipped; model IDs change, so verify the exact
+        slug in the official OpenAI model catalog before overriding it.
     differentiate:
         When ``True`` use differentiation mode to highlight contrasts.
     circle_column_name, square_column_name:
         Optional paired columns for contrastive classification.
     n_parallels:
-        Maximum number of concurrent classification calls.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     n_runs:
         Number of repeated classification passes.
     n_attributes_per_run:
@@ -842,7 +884,7 @@ async def ideate(
     *,
     save_dir: str,
     file_name: str = "ideation.csv",
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     scientific_theory: bool = True,
     ranking_model: Optional[str] = None,
     n_ideas: int = 1000,
@@ -865,7 +907,7 @@ async def ideate(
     rate_config_updates: Optional[Dict[str, Any]] = None,
     rate_run_kwargs: Optional[Dict[str, Any]] = None,
     use_seed_entities: Optional[bool] = None,
-    seed_deduplicate: bool = True,
+    seed_deduplicate: bool = False,
     seed_config_updates: Optional[Dict[str, Any]] = None,
     seed_run_kwargs: Optional[Dict[str, Any]] = None,
     deduplicate_run_kwargs: Optional[Dict[str, Any]] = None,
@@ -890,14 +932,19 @@ async def ideate(
     file_name:
         CSV name for the consolidated ideation output.
     model, ranking_model:
-        Models used for idea generation and ranking (if different).
+        Models used for idea generation and ranking (if different). Their
+        defaults were current when this package version shipped; model IDs
+        change, so verify exact slugs in the official OpenAI model catalog.
     scientific_theory:
         When ``True`` generate novel scientific theories; when ``False`` generate
         general-purpose ideas with the same output structure.
     n_ideas:
         Target number of ideas to generate before pruning.
     n_parallels:
-        Maximum concurrent calls for generation and ranking phases.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     evaluation_mode:
         Strategy used to evaluate ideas (for example ``"recursive_rank"``).
     attributes:
@@ -918,6 +965,8 @@ async def ideate(
         Force regeneration of outputs in ``save_dir``.
     *_config_updates, *_run_kwargs:
         Fine-grained overrides for nested Rate/Rank/Seed/Deduplicate tasks.
+        A legacy ``max_output_tokens`` entry is accepted, warned about, and
+        ignored.
     seed_deduplicate:
         When ``True`` enable deduplication in the nested seed generation.
     template_path:
@@ -1026,7 +1075,7 @@ async def deidentify(
     save_dir: str,
     grouping_column: Optional[str] = None,
     mapping_column: Optional[str] = None,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     n_parallels: int = 650,
     file_name: str = "deidentified.csv",
     max_words_per_call: int = 7500,
@@ -1060,9 +1109,14 @@ async def deidentify(
     mapping_column:
         Optional column providing deterministic replacement tokens.
     model:
-        Model name used to perform the deidentification.
+        Model name used to perform deidentification. The signature default was
+        current when this package version shipped; model IDs change, so verify
+        the exact slug in the official OpenAI model catalog before overriding it.
     n_parallels:
-        Maximum concurrent requests.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     file_name:
         CSV filename used when persisting deidentified text.
     max_words_per_call:
@@ -1136,7 +1190,7 @@ async def rank(
     attributes: Union[Dict[str, str], List[str]],
     save_dir: str,
     additional_instructions: Optional[str] = None,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-luna",
     n_rounds: int = 5,
     matches_per_round: int = 3,
     power_matching: bool = True,
@@ -1191,11 +1245,16 @@ async def rank(
     additional_instructions:
         Free-form prompt additions applied to each comparison.
     model:
-        Model name used for ranking calls.
+        Model name used for ranking calls. The signature default was current
+        when this package version shipped; model IDs change, so verify the exact
+        slug in the official OpenAI model catalog before overriding it.
     n_rounds, matches_per_round, power_matching, learning_rate:
         Parameters controlling the Elo-style tournament mechanics.
     n_parallels:
-        Maximum concurrent ranking calls.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     n_attributes_per_run:
         Maximum number of attributes to compare per prompt. When set to an
         integer, larger attribute sets are split across multiple prompts; when
@@ -1218,6 +1277,8 @@ async def rank(
         ``False`` to skip the rating seed.
     rate_kwargs:
         Additional configuration forwarded to the preliminary rating stage.
+        A legacy ``max_output_tokens`` entry is accepted, warned about, and
+        ignored.
     primer_scores, primer_scale, primer_center:
         Optional seed ratings to prime the Bradley–Terry loop. Scores are
         centred per attribute when ``primer_center`` is ``True`` and scaled
@@ -1258,6 +1319,8 @@ async def rank(
         dict(cfg_kwargs),
         task_name="rank",
     )
+    rate_kwargs = dict(rate_kwargs or {})
+    _discard_deprecated_max_output_tokens(rate_kwargs, stacklevel=3)
     cfg = RankConfig(
         attributes=attributes,
         n_rounds=n_rounds,
@@ -1284,7 +1347,7 @@ async def rank(
         recursive_keep_stage_columns=recursive_keep_stage_columns,
         recursive_add_stage_suffix=recursive_add_stage_suffix,
         initial_rating_pass=initial_rating_pass,
-        rate_kwargs=rate_kwargs or {},
+        rate_kwargs=rate_kwargs,
         primer_scores=primer_scores,
         primer_scale=primer_scale,
         primer_center=primer_center,
@@ -1329,7 +1392,7 @@ async def codify(
     save_dir: str,
     categories: Optional[Dict[str, str]] = None,
     additional_instructions: str = "",
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     n_parallels: int = 650,
     max_words_per_call: int = 1000,
     max_categories_per_call: int = 8,
@@ -1366,9 +1429,14 @@ async def codify(
     additional_instructions:
         Extra guidance appended to the coding prompt.
     model:
-        Model used for coding requests.
+        Model used for coding requests. The signature default was current when
+        this package version shipped; model IDs change, so verify the exact slug
+        in the official OpenAI model catalog before overriding it.
     n_parallels:
-        Maximum number of concurrent coding calls.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     max_words_per_call:
         Chunk size control for each request.
     max_categories_per_call:
@@ -1448,7 +1516,7 @@ async def paraphrase(
     *,
     instructions: str,
     save_dir: str,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     modality: str = "text",
     n_rounds: int = 1,
     n_runs: int = 1,
@@ -1485,7 +1553,9 @@ async def paraphrase(
     save_dir:
         Directory where paraphrase outputs are written.
     model:
-        Model name used for generation.
+        Model name used for generation. The signature default was current when
+        this package version shipped; model IDs change, so verify the exact slug
+        in the official OpenAI model catalog before overriding it.
     modality:
         Modality of inputs (text, image, audio, pdf, entity, web).
     n_rounds:
@@ -1502,7 +1572,10 @@ async def paraphrase(
     use_modified_source:
         If ``True`` allow modified source text to be used during validation.
     n_parallels:
-        Maximum concurrent paraphrase calls.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     reset_files:
         When ``True`` regenerate outputs even if files already exist.
     json_mode:
@@ -1578,7 +1651,7 @@ async def compare(
     save_dir: str,
     differentiate: bool = True,
     additional_instructions: Optional[str] = None,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     n_parallels: int = 650,
     n_runs: int = 1,
     reset_files: bool = False,
@@ -1611,9 +1684,14 @@ async def compare(
     additional_instructions:
         Extra prompt guidance applied to each comparison.
     model:
-        Model name for comparison calls.
+        Model name for comparison calls. The signature default was current when
+        this package version shipped; model IDs change, so verify the exact slug
+        in the official OpenAI model catalog before overriding it.
     n_parallels:
-        Maximum number of concurrent comparison requests.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     n_runs:
         Number of repeated comparisons to gather per pair.
     reset_files:
@@ -1682,7 +1760,7 @@ async def bucket(
     *,
     save_dir: str,
     additional_instructions: Optional[str] = None,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     n_parallels: int = 650,
     reset_files: bool = False,
     file_name: str = "bucket_definitions.csv",
@@ -1712,9 +1790,14 @@ async def bucket(
     additional_instructions:
         Extra prompt guidance for bucket creation.
     model:
-        Model used to propose bucket definitions.
+        Model used to propose bucket definitions. The signature default was
+        current when this package version shipped; model IDs change, so verify
+        the exact slug in the official OpenAI model catalog before overriding it.
     n_parallels:
-        Maximum number of concurrent bucket definition calls.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     reset_files:
         When ``True`` regenerate outputs despite existing files.
     file_name:
@@ -1784,7 +1867,7 @@ async def discover(
     square_column_name: Optional[str] = None,
     save_dir: str,
     additional_instructions: Optional[str] = None,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     n_parallels: int = 650,
     reset_files: bool = False,
     n_runs: int = 1,
@@ -1827,9 +1910,15 @@ async def discover(
     additional_instructions:
         Extra guidance applied throughout the discovery pipeline.
     model:
-        Model used for bucket definitions and classification.
+        Model used for bucket definitions and classification. The signature
+        default was current when this package version shipped; model IDs change,
+        so verify the exact slug in the official OpenAI model catalog before
+        overriding it.
     n_parallels:
-        Maximum concurrent calls per stage.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     n_runs:
         Number of classification repetitions to stabilise label prevalence.
     min_frequency:
@@ -1927,7 +2016,7 @@ async def deduplicate(
     additional_instructions: Optional[str] = None,
     modality: str = "entity",
     max_words_per_text: int = 500,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     n_parallels: int = 650,
     n_runs: int = 3,
     reset_files: bool = False,
@@ -1964,9 +2053,14 @@ async def deduplicate(
     max_words_per_text:
         Maximum word count for each text snippet when ``modality="text"``.
     model:
-        Model name used for overlap detection.
+        Model name used for overlap detection. The signature default was current
+        when this package version shipped; model IDs change, so verify the exact
+        slug in the official OpenAI model catalog before overriding it.
     n_parallels:
-        Maximum number of concurrent calls.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     n_runs:
         Number of passes to run; helps stabilise duplicate detection.
     reset_files:
@@ -2052,7 +2146,7 @@ async def merge(
     right_on: Optional[str] = None,
     how: str = "left",
     additional_instructions: Optional[str] = None,
-    model: str = "gpt-5.4-nano",
+    model: str = "gpt-5.6-luna",
     n_parallels: int = 650,
     n_runs: int = 1,
     reset_files: bool = False,
@@ -2093,9 +2187,14 @@ async def merge(
     additional_instructions:
         Extra prompt context for the model.
     model:
-        Model used to compare candidate records.
+        Model used to compare candidate records. The signature default was
+        current when this package version shipped; model IDs change, so verify
+        the exact slug in the official OpenAI model catalog before overriding it.
     n_parallels:
-        Maximum number of concurrent merge comparisons.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     n_runs:
         Number of repeated comparisons per candidate.
     reset_files:
@@ -2195,7 +2294,7 @@ async def filter(
     n_runs: int = 1,
     threshold: float = 0.5,
     additional_instructions: Optional[str] = None,
-    model: str = "gpt-5.4-nano",
+    model: str = "gpt-5.6-luna",
     n_parallels: int = 650,
     reset_files: bool = False,
     file_name: str = "filter_responses.csv",
@@ -2235,9 +2334,14 @@ async def filter(
     additional_instructions:
         Extra guidance appended to the filter prompt.
     model:
-        Model used for filtering.
+        Model used for filtering. The signature default was current when this
+        package version shipped; model IDs change, so verify the exact slug in
+        the official OpenAI model catalog before overriding it.
     n_parallels:
-        Maximum number of concurrent filtering calls.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     reset_files:
         When ``True`` regenerate outputs even if files exist.
     file_name:
@@ -2309,7 +2413,7 @@ async def debias(
     strip_percentages: Optional[List[int]] = None,
     categories_to_strip: Optional[List[str]] = None,
     template_path: Optional[str] = None,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     n_parallels: int = 650,
     measurement_kwargs: Optional[Dict[str, Any]] = None,
     removal_kwargs: Optional[Dict[str, Any]] = None,
@@ -2361,11 +2465,18 @@ async def debias(
     template_path:
         Optional template override used during removal steps.
     model:
-        Model used across the measurement and removal stages.
+        Model used across the measurement and removal stages. The signature
+        default was current when this package version shipped; model IDs change,
+        so verify the exact slug in the official OpenAI model catalog before
+        overriding it.
     n_parallels:
-        Maximum concurrent API calls.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     measurement_kwargs, removal_kwargs:
-        Fine-grained overrides for the measurement and removal tasks.
+        Fine-grained overrides for the measurement and removal tasks. A legacy
+        ``max_output_tokens`` entry is accepted, warned about, and ignored.
     remaining_signal:
         When ``True`` (default) measure a remaining-signal prevalence attribute on
         the stripped text and use it in the two-step debiasing regression.
@@ -2471,7 +2582,7 @@ async def whatever(
     prompt_images: Optional[Dict[str, List[str]]] = None,
     prompt_audio: Optional[Dict[str, List[Dict[str, str]]]] = None,
     file_name: str = "custom_prompt_responses.csv",
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-5.6-terra",
     json_mode: bool = False,
     web_search: Optional[bool] = None,
     web_search_filters: Optional[Dict[str, Any]] = None,
@@ -2514,6 +2625,9 @@ async def whatever(
         CSV filename for persisted responses.
     model:
         Model name passed to :func:`gabriel.utils.openai_utils.get_all_responses`.
+        The signature default was current when this package version shipped;
+        model IDs change, so verify the exact slug in the official OpenAI model
+        catalog before overriding it.
     json_mode:
         Whether to request JSON-mode responses where supported.
     web_search:
@@ -2524,7 +2638,10 @@ async def whatever(
     search_context_size:
         Context size hint for web-search capable models.
     n_parallels:
-        Maximum concurrent response requests.
+        Concurrency ceiling, not a fixed worker count. Keep the default unchanged:
+        GABRIEL ramps up and adapts to rate limits and repeated errors. Temporary
+        retries and slow stragglers are normal; let a progressing run finish.
+        Reduce it only for a persistent failure or known deployment constraint.
     reset_files:
         When ``True`` regenerate outputs even if files already exist.
     return_original_columns:
@@ -2545,7 +2662,8 @@ async def whatever(
         ``json_mode``) and return a DataFrame containing a ``"Response"`` column.
     **kwargs:
         Additional parameters forwarded directly to
-        :func:`gabriel.utils.openai_utils.get_all_responses`.
+        :func:`gabriel.utils.openai_utils.get_all_responses`. The deprecated
+        ``max_output_tokens`` argument is accepted, warned about, and ignored.
 
     Returns
     -------
@@ -2560,6 +2678,7 @@ async def whatever(
         raise ValueError("Either prompts or df must be provided to `whatever`.")
 
     kwargs = dict(kwargs)
+    _discard_deprecated_max_output_tokens(kwargs, stacklevel=3)
     if response_fn is None:
         response_fn = kwargs.pop("response_fn", None)
     else:

@@ -27,7 +27,7 @@ class BucketConfig:
     bucket_count: int = 10
     save_dir: str = "buckets"
     file_name: str = "bucket_definitions.csv"
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-terra"
     n_parallels: int = 650
     use_dummy: bool = False
     additional_instructions: Optional[str] = None

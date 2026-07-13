@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from typing import Any, Dict, List, Optional, Tuple
 
 import json
@@ -16,17 +17,28 @@ from gabriel.tasks.deidentify import Deidentifier, DeidentifyConfig
 from gabriel.tasks.classify import Classify, ClassifyConfig, _collect_predictions
 from gabriel.tasks.extract import Extract, ExtractConfig
 from gabriel.tasks.rank import Rank, RankConfig
+from gabriel.tasks.ideate import Ideate, IdeateConfig
 from gabriel.tasks.discover import Discover, DiscoverConfig
 from gabriel.tasks.bucket import Bucket, BucketConfig
 import gabriel.tasks.discover as discover_module
 import gabriel
 
 
-def test_decide_default_max_output_tokens_respects_user_choice():
-    assert (
-        openai_utils._decide_default_max_output_tokens(4096, {"remaining_tokens": "10"})
-        == 4096
-    )
+def test_rate_classify_rank_and_extract_default_to_luna():
+    assert RateConfig(attributes={"score": ""}).model == "gpt-5.6-luna"
+    assert ClassifyConfig(labels={"label": ""}).model == "gpt-5.6-luna"
+    assert RankConfig(attributes={"score": ""}).model == "gpt-5.6-luna"
+    assert ExtractConfig(attributes={"field": ""}).model == "gpt-5.6-luna"
+    for function in (gabriel.rate, gabriel.classify, gabriel.rank, gabriel.extract):
+        assert inspect.signature(function).parameters["model"].default == "gpt-5.6-luna"
+
+
+def test_decide_default_max_output_tokens_warns_and_ignores_user_choice():
+    with pytest.warns(FutureWarning, match="deprecated and ignored"):
+        cutoff = openai_utils._decide_default_max_output_tokens(
+            4096, {"remaining_tokens": "10"}
+        )
+    assert cutoff is None
 
 
 def test_decide_default_max_output_tokens_no_longer_caps_by_default():
@@ -54,6 +66,56 @@ def test_normalise_web_search_filters_sets_default_location_type():
     normalised = openai_utils._normalise_web_search_filters(filters)
     assert normalised["user_location"]["type"] == "approximate"
     assert normalised["user_location"]["country"] == "US"
+
+
+def test_build_params_warns_and_drops_deprecated_max_output_tokens():
+    with pytest.warns(FutureWarning, match="deprecated and ignored"):
+        params = openai_utils._build_params(
+            model="gpt-5.6-terra",
+            input_data=[{"role": "user", "content": "hello"}],
+            max_output_tokens=123,
+            temperature=0.9,
+        )
+
+    assert "max_output_tokens" not in params
+
+
+def test_build_params_preserves_json_mode_without_schema():
+    params = openai_utils._build_params(
+        model="gpt-5.6-terra",
+        input_data=[{"role": "user", "content": "hello"}],
+        max_output_tokens=None,
+        temperature=0.9,
+        json_mode=True,
+    )
+
+    assert params["text"] == {"format": {"type": "json_object"}}
+
+
+def test_build_params_uses_named_strict_structured_output_schema():
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
+    params = openai_utils._build_params(
+        model="gpt-5.6-terra",
+        input_data=[{"role": "user", "content": "hello"}],
+        max_output_tokens=None,
+        temperature=0.9,
+        json_mode=True,
+        expected_schema=schema,
+    )
+
+    assert params["text"] == {
+        "format": {
+            "type": "json_schema",
+            "name": "gabriel_structured_response",
+            "strict": True,
+            "schema": schema,
+        }
+    }
 
 
 def test_build_params_embeds_web_search_tool_payload():
@@ -214,24 +276,27 @@ def test_estimate_cost_applies_service_tier_multiplier():
     base = openai_utils._estimate_cost(
         prompts=["one two three"],
         n=1,
-        max_output_tokens=100,
+        max_output_tokens=None,
         model="gpt-5.4-mini",
         use_batch=False,
+        estimated_output_tokens_per_prompt=100,
     )
     priority = openai_utils._estimate_cost(
         prompts=["one two three"],
         n=1,
-        max_output_tokens=100,
+        max_output_tokens=None,
         model="gpt-5.4-mini",
         use_batch=False,
+        estimated_output_tokens_per_prompt=100,
         service_tier="priority",
     )
     flex = openai_utils._estimate_cost(
         prompts=["one two three"],
         n=1,
-        max_output_tokens=100,
+        max_output_tokens=None,
         model="gpt-5.4-mini",
         use_batch=False,
+        estimated_output_tokens_per_prompt=100,
         service_tier="flex",
     )
 
@@ -250,6 +315,35 @@ def test_lookup_model_pricing_supports_gpt_audio_1_5():
         "output": 10.00,
         "batch": 0.5,
     }
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        (
+            "gpt-5.6",
+            {"input": 5.00, "cached_input": 0.50, "output": 30.00, "batch": 0.5},
+        ),
+        (
+            "gpt-5.6-sol-api-ev3",
+            {"input": 5.00, "cached_input": 0.50, "output": 30.00, "batch": 0.5},
+        ),
+        (
+            "gpt-5.6-terra",
+            {"input": 2.50, "cached_input": 0.25, "output": 15.00, "batch": 0.5},
+        ),
+        (
+            "gpt-5.6-luna-preview",
+            {"input": 1.00, "cached_input": 0.10, "output": 6.00, "batch": 0.5},
+        ),
+    ],
+)
+def test_lookup_model_pricing_supports_gpt_5_6_family(model, expected):
+    assert openai_utils._lookup_model_pricing(model) == expected
+
+
+def test_lookup_model_pricing_does_not_guess_unknown_future_gpt_5_version():
+    assert openai_utils._lookup_model_pricing("gpt-5.7") is None
 
 
 def test_extract_web_search_sources_recurses_nested_payload():
@@ -302,6 +396,17 @@ def test_shuffled_dict_rendering():
 
 def test_get_response_dummy():
     responses, _ = asyncio.run(openai_utils.get_response("hi", use_dummy=True))
+    assert responses and responses[0].startswith("DUMMY")
+
+
+def test_get_response_warns_and_ignores_deprecated_max_output_tokens():
+    with pytest.warns(FutureWarning, match="deprecated and ignored"):
+        responses, _ = asyncio.run(
+            openai_utils.get_response(
+                "hi", max_output_tokens=1, use_dummy=True
+            )
+        )
+
     assert responses and responses[0].startswith("DUMMY")
 
 
@@ -611,6 +716,35 @@ def test_get_all_responses_dummy(tmp_path):
     assert len(df) == 2
     assert set(["Successful", "Error Log"]).issubset(df.columns)
     assert df["Successful"].all()
+
+
+def test_get_all_responses_warns_and_hides_deprecated_cap_from_custom_runner(
+    tmp_path,
+):
+    captured: Dict[str, Any] = {}
+
+    async def custom_runner(
+        *, prompts, identifiers, max_output_tokens="missing", **kwargs
+    ):
+        captured["max_output_tokens"] = max_output_tokens
+        return pd.DataFrame(
+            {"Identifier": identifiers, "Response": ["ok"] * len(prompts)}
+        )
+
+    with pytest.warns(FutureWarning, match="deprecated and ignored") as caught:
+        result = asyncio.run(
+            openai_utils.get_all_responses(
+                prompts=["a"],
+                identifiers=["1"],
+                max_output_tokens=1,
+                save_path=str(tmp_path / "deprecated-cap.csv"),
+                get_all_responses_fn=custom_runner,
+            )
+        )
+
+    assert len(result) == 1
+    assert len(caught) == 1
+    assert captured["max_output_tokens"] is None
 
 
 def test_get_all_responses_service_tier_prints_pricing_note(tmp_path, capsys):
@@ -1770,7 +1904,7 @@ def test_api_wrappers(tmp_path):
     assert len(custom) == 1
 
 
-def test_api_rate_passes_response_kwargs_to_get_all_responses(tmp_path, monkeypatch):
+def test_api_rate_warns_and_drops_deprecated_max_output_tokens(tmp_path, monkeypatch):
     captured: Dict[str, Any] = {}
 
     async def fake_get_all_responses(**kwargs):
@@ -1786,23 +1920,26 @@ def test_api_rate_passes_response_kwargs_to_get_all_responses(tmp_path, monkeypa
     monkeypatch.setattr("gabriel.tasks.rate.get_all_responses", fake_get_all_responses)
 
     df = pd.DataFrame({"txt": ["hello"]})
-    rated = asyncio.run(
-        gabriel.rate(
-            df,
-            "txt",
-            attributes={"clarity": ""},
-            save_dir=str(tmp_path / "rate-pass-through"),
-            image_detail="high",
-            max_output_tokens=123,
+    with pytest.warns(FutureWarning, match="deprecated and ignored"):
+        rated = asyncio.run(
+            gabriel.rate(
+                df,
+                "txt",
+                attributes={"clarity": ""},
+                save_dir=str(tmp_path / "rate-pass-through"),
+                image_detail="high",
+                max_output_tokens=123,
+            )
         )
-    )
 
     assert rated.loc[0, "clarity"] == 91.0
     assert captured["image_detail"] == "high"
-    assert captured["max_output_tokens"] == 123
+    assert "max_output_tokens" not in captured
 
 
-def test_api_classify_passes_response_kwargs_to_get_all_responses(tmp_path, monkeypatch):
+def test_api_classify_warns_and_drops_deprecated_max_output_tokens(
+    tmp_path, monkeypatch
+):
     captured: Dict[str, Any] = {}
 
     async def fake_get_all_responses(**kwargs):
@@ -1818,20 +1955,21 @@ def test_api_classify_passes_response_kwargs_to_get_all_responses(tmp_path, monk
     monkeypatch.setattr("gabriel.tasks.classify.get_all_responses", fake_get_all_responses)
 
     df = pd.DataFrame({"txt": ["hello"]})
-    classified = asyncio.run(
-        gabriel.classify(
-            df,
-            "txt",
-            labels={"yes": ""},
-            save_dir=str(tmp_path / "classify-pass-through"),
-            image_detail="low",
-            max_output_tokens=77,
+    with pytest.warns(FutureWarning, match="deprecated and ignored"):
+        classified = asyncio.run(
+            gabriel.classify(
+                df,
+                "txt",
+                labels={"yes": ""},
+                save_dir=str(tmp_path / "classify-pass-through"),
+                image_detail="low",
+                max_output_tokens=77,
+            )
         )
-    )
 
     assert bool(classified.loc[0, "yes"])
     assert captured["image_detail"] == "low"
-    assert captured["max_output_tokens"] == 77
+    assert "max_output_tokens" not in captured
 
 
 def test_api_rate_default_call_unchanged_without_passthrough_kwargs(tmp_path, monkeypatch):
@@ -2325,6 +2463,8 @@ def test_ideate_api_routes_embedding_overrides_to_seed_and_dedup(monkeypatch, tm
 
     async def fake_run(self, topic: str, **kwargs):
         captured["topic"] = topic
+        captured["model"] = self.cfg.model
+        captured["seed_deduplicate"] = self.cfg.seed_deduplicate
         captured.update(kwargs)
         return pd.DataFrame({"idea_id": ["idea-00000"], "report_text": ["hello"]})
 
@@ -2349,6 +2489,8 @@ def test_ideate_api_routes_embedding_overrides_to_seed_and_dedup(monkeypatch, tm
 
     assert len(result) == 1
     assert captured["topic"] == "AI policy"
+    assert captured["model"] == "gpt-5.6-terra"
+    assert captured["seed_deduplicate"] is False
     assert "embedding_fn" not in captured["generation_kwargs"]
     assert "get_all_embeddings_fn" not in captured["generation_kwargs"]
     assert captured["seed_run_kwargs"]["embedding_fn"] is custom_embedding
@@ -2361,3 +2503,149 @@ def test_ideate_api_routes_embedding_overrides_to_seed_and_dedup(monkeypatch, tm
         captured["deduplicate_run_kwargs"]["get_all_embeddings_fn"]
         is custom_embedding_driver
     )
+
+
+def test_ideate_seed_deduplication_can_be_enabled(monkeypatch, tmp_path):
+    captured: Dict[str, Any] = {}
+
+    async def fake_run(self, topic: str, **kwargs):
+        captured["seed_deduplicate"] = self.cfg.seed_deduplicate
+        return pd.DataFrame({"idea_id": ["idea-00000"], "report_text": ["hello"]})
+
+    monkeypatch.setattr("gabriel.api.Ideate.run", fake_run)
+    asyncio.run(
+        gabriel.ideate(
+            "AI policy",
+            save_dir=str(tmp_path / "ideate-opt-in-dedup"),
+            n_ideas=1,
+            evaluation_mode="none",
+            seed_deduplicate=True,
+        )
+    )
+
+    assert captured["seed_deduplicate"] is True
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_ideate_seed_deduplication_setting_reaches_seed_task(
+    monkeypatch, tmp_path, enabled
+):
+    captured: Dict[str, Any] = {}
+
+    async def fake_seed_run(self, **kwargs):
+        captured["deduplicate"] = self.cfg.deduplicate
+        return pd.DataFrame(
+            {
+                "entity": ["sample seed"],
+                "entity_id": ["entity-00000"],
+                "source_batch": [0],
+                "source_identifier": ["seed-00000"],
+            }
+        )
+
+    monkeypatch.setattr("gabriel.tasks.ideate.Seed.run", fake_seed_run)
+    task = Ideate(
+        IdeateConfig(
+            save_dir=str(tmp_path / f"ideate-seed-dedup-{enabled}"),
+            n_ideas=1,
+            seed_deduplicate=enabled,
+        )
+    )
+    asyncio.run(
+        task._generate_seed_entities(
+            "AI policy",
+            None,
+            reset_files=True,
+            config_updates={},
+            run_kwargs={},
+        )
+    )
+
+    assert captured["deduplicate"] is enabled
+
+
+def test_ideate_accepts_deprecated_output_token_cap_and_ignores_it(tmp_path):
+    task = Ideate(
+        IdeateConfig(
+            save_dir=str(tmp_path / "ideate-no-output-cap"),
+            n_ideas=1,
+            n_parallels=1,
+            evaluation_mode="none",
+            use_dummy=True,
+            use_seed_entities=False,
+            deduplicate_ideas=False,
+        )
+    )
+
+    with pytest.warns(FutureWarning, match="deprecated and ignored"):
+        result = asyncio.run(
+            task.run(
+                "AI policy",
+                reset_files=True,
+                generation_kwargs={
+                    "max_output_tokens": 123,
+                    "verbose": False,
+                    "quiet": True,
+                },
+            )
+        )
+
+    assert len(result) == 1
+
+
+def test_ideate_scrubs_nested_output_caps_once_without_mutating_inputs(
+    monkeypatch, tmp_path
+):
+    seed_call: Dict[str, Any] = {}
+
+    async def fake_seed_run(self, **kwargs):
+        seed_call.update(kwargs)
+        return pd.DataFrame(
+            {
+                "entity": ["sample seed"],
+                "entity_id": ["entity-00000"],
+                "source_batch": [0],
+                "source_identifier": ["seed-00000"],
+            }
+        )
+
+    monkeypatch.setattr("gabriel.tasks.ideate.Seed.run", fake_seed_run)
+    generation_kwargs = {
+        "max_output_tokens": 10,
+        "verbose": False,
+        "quiet": True,
+    }
+    seed_config_updates = {"max_output_tokens": 20}
+    seed_run_kwargs = {"max_output_tokens": 30}
+    rank_config_updates = {"rate_kwargs": {"max_output_tokens": 40}}
+    task = Ideate(
+        IdeateConfig(
+            save_dir=str(tmp_path / "ideate-nested-output-cap"),
+            n_ideas=1,
+            n_parallels=1,
+            evaluation_mode="none",
+            use_dummy=True,
+            use_seed_entities=True,
+            deduplicate_ideas=False,
+        )
+    )
+
+    with pytest.warns(FutureWarning, match="deprecated and ignored") as caught:
+        result = asyncio.run(
+            task.run(
+                "AI policy",
+                reset_files=True,
+                generation_kwargs=generation_kwargs,
+                rank_config_updates=rank_config_updates,
+                seed_config_updates=seed_config_updates,
+                seed_run_kwargs=seed_run_kwargs,
+            )
+        )
+
+    assert len(caught) == 1
+    assert len(result) == 1
+    assert "max_output_tokens" not in seed_call
+    assert generation_kwargs["max_output_tokens"] == 10
+    assert seed_config_updates["max_output_tokens"] == 20
+    assert seed_run_kwargs["max_output_tokens"] == 30
+    assert rank_config_updates["rate_kwargs"]["max_output_tokens"] == 40

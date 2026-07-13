@@ -18,10 +18,11 @@ def test_usage_overview_compact_printout(capsys):
     openai_utils._print_usage_overview(
         prompts=["hello", "world"],
         n=1,
-        max_output_tokens=32,
+        max_output_tokens=None,
         model="gpt-5.4-mini",
         use_batch=False,
         n_parallels=4,
+        estimated_output_tokens_per_prompt=32,
         verbose=True,
         rate_headers={"limit_requests": "20", "limit_tokens": "2000"},
         heading="Usage check",
@@ -129,6 +130,40 @@ def test_ramp_up_increases_parallelism(tmp_path):
     )
 
     assert active["peak"] > 2
+
+
+def test_ramp_up_worker_spawner_does_not_plateau_at_half_queue(tmp_path):
+    active = {"current": 0, "peak": 0}
+    lock = asyncio.Lock()
+
+    async def responder(prompt: str, **_: object):
+        async with lock:
+            active["current"] += 1
+            active["peak"] = max(active["peak"], active["current"])
+        await asyncio.sleep(0.20)
+        async with lock:
+            active["current"] -= 1
+        return [f"ok-{prompt}"], 0.20, []
+
+    asyncio.run(
+        openai_utils.get_all_responses(
+            prompts=[f"p{i}" for i in range(10)],
+            identifiers=[f"p{i}" for i in range(10)],
+            response_fn=responder,
+            use_dummy=False,
+            save_path=str(tmp_path / "responses.csv"),
+            reset_files=True,
+            dynamic_timeout=False,
+            max_retries=1,
+            n_parallels=10,
+            ramp_up_seconds=0.05,
+            ramp_up_start_fraction=0.2,
+            status_report_interval=None,
+            logging_level="error",
+        )
+    )
+
+    assert active["peak"] >= 8
 
 
 def test_ramp_up_halts_on_rate_limit(tmp_path, capsys):

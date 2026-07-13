@@ -21,7 +21,7 @@ class FilterConfig:
     condition: str
     save_dir: str
     file_name: str = "filter_responses.csv"
-    model: str = "gpt-5.4-nano"
+    model: str = "gpt-5.6-luna"
     n_parallels: int = 650
     entities_per_call: int = 150
     shuffle: bool = True

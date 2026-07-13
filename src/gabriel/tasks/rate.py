@@ -41,7 +41,7 @@ class RateConfig:
     attributes: Dict[str, str]
     save_dir: str = "ratings"
     file_name: str = "ratings.csv"
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-luna"
     n_parallels: int = 650
     n_runs: int = 1
     use_dummy: bool = False

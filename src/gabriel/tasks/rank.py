@@ -192,7 +192,7 @@ class RankConfig:
     matches_per_round: int = 5
     power_matching: bool = True
     learning_rate: float = 0.1
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-luna"
     n_parallels: int = 650
     use_dummy: bool = False
     save_dir: str = os.path.expanduser("~/Documents/runs")

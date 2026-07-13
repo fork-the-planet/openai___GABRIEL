@@ -72,7 +72,7 @@ class ParaphraseConfig:
     file_name: str = "paraphrase_responses.csv"
     # OpenAI model used for both paraphrasing and classification.  The
     # default matches the existing behaviour of GABRIEL.
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5.6-terra"
     # When true, the model will be asked to output JSON only.
     json_mode: bool = False
     # When set, controls whether the underlying helper should use web search

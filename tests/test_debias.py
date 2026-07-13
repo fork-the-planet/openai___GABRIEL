@@ -14,6 +14,39 @@ def _range_index(n: int) -> pd.Index:
     return pd.Index(range(n), name="__debias_row_id")
 
 
+def test_debias_scrubs_nested_output_caps_once_without_mutating_inputs(tmp_path):
+    measurement_kwargs = {
+        "max_output_tokens": 10,
+        "rate_kwargs": {"max_output_tokens": 30},
+    }
+    removal_kwargs = {"max_output_tokens": 20}
+    cfg = DebiasConfig(
+        mode="rate",
+        measurement_attribute="bias_score",
+        attributes={"bias_score": "desc"},
+        signal_dictionary={"bias_score": "remove"},
+        removal_method="codify",
+        remaining_signal=False,
+        save_dir=str(tmp_path),
+        strip_percentages=[100],
+        run_name="deprecated_output_cap",
+        verbose=False,
+        measurement_kwargs=measurement_kwargs,
+        removal_kwargs=removal_kwargs,
+    )
+
+    with pytest.warns(FutureWarning, match="deprecated and ignored") as caught:
+        DebiasPipeline(cfg)
+
+    assert len(caught) == 1
+    assert "max_output_tokens" not in cfg.measurement_kwargs
+    assert "max_output_tokens" not in cfg.removal_kwargs
+    assert "max_output_tokens" not in cfg.measurement_kwargs["rate_kwargs"]
+    assert measurement_kwargs["max_output_tokens"] == 10
+    assert measurement_kwargs["rate_kwargs"]["max_output_tokens"] == 30
+    assert removal_kwargs["max_output_tokens"] == 20
+
+
 def test_prepare_codify_variants_strips_text(monkeypatch, tmp_path):
     df = pd.DataFrame({"text": ["alpha BIAS0 omega", "beta BIAS1 gamma"]})
     cfg = DebiasConfig(
@@ -239,7 +272,7 @@ def test_debias_pipeline_codify_flow(monkeypatch, tmp_path):
 
     metadata = result.metadata
     assert metadata["config"]["removal_method"] == "codify"
-    assert metadata["config"]["model"] == "gpt-5.4-mini"
+    assert metadata["config"]["model"] == "gpt-5.6-terra"
     metadata_path = Path(metadata["metadata_path"])
     assert metadata_path.exists()
     saved_df = pd.read_csv(metadata["result_path"])
