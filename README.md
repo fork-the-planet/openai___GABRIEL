@@ -4,6 +4,8 @@
 
 📓 **Tutorial notebook** (start here!): [GABRIEL Colab notebook](https://colab.research.google.com/drive/1RMUeAWACpViqiUMlPMMwPTKyGU-OX756?usp=sharing) — also available as `gabriel_tutorial_notebook.ipynb` in this repo if you’d like to download and run it locally.
 
+🖥️ **Slides:** [Presentation deck](https://drive.google.com/file/d/1hpslDIEw1_26OTK1mAt9PcU6sYiJHhb8/view?usp=sharing)
+
 You can install the GABRIEL Python library from [PyPI](https://pypi.org/project/openai-gabriel/) with `pip install openai-gabriel` and then `import gabriel`.
 
 > **Compatibility note:** `max_output_tokens` is deprecated in GABRIEL. Existing
